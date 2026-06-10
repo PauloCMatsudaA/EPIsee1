@@ -9,7 +9,7 @@ import numpy as np
 from datetime import datetime
 from threading import Thread
 from app.core.sector_epi_config import get_epis_obrigatorios
-
+from app.services.telegram_service import enviar_alerta_telegram
 
 
 logger = logging.getLogger(__name__)
@@ -54,15 +54,18 @@ async def get_epis_obrigatorios_do_setor(sector_id: int | None) -> set[str]:
     try:
         from app.core.database import AsyncSessionLocal
         from app.models.sector import Sector
+        from sqlalchemy import select as sa_select         
         async with AsyncSessionLocal() as db:
             result = await db.execute(
-                select(Sector).where(Sector.id == sector_id)
+                sa_select(Sector).where(Sector.id == sector_id)
             )
             sector = result.scalar_one_or_none()
             if sector and sector.epis_obrigatorios:
-                return set(sector.epis_obrigatorios)
-    except Exception:
-        pass
+                epis = set(sector.epis_obrigatorios)
+                logger.info(f"[SETOR {sector_id}] EPIs obrigatórios: {epis}")
+                return epis
+    except Exception as e:
+        logger.error(f"[SETOR {sector_id}] Erro ao buscar EPIs do banco: {e}", exc_info=True)
     return {"safety-vest"}
 
 
@@ -416,6 +419,19 @@ async def salvar_ocorrencia(camera_id: int, sector_id: int, resultado: dict, fra
                         texto=texto,
                         lida=False,
                     ))
+                    # Envia alerta pelo Telegram se o gestor tiver phone cadastrado
+                    if g.phone:
+                        mensagem_tg = (
+                            f" <b>ALERTA de não Conformidade</b>\n\n"
+                            f"Câmera: <b>{camera_id}</b>\n"
+                            f"EPIs faltando: <b>{ausentes_str}</b>\n"
+                            f"Confiança: <b>{resultado['confidence'] * 100:.0f}%</b>\n"
+                            f"Horário: <b>{datetime.utcnow().strftime('%d/%m/%Y %H:%M:%S')} UTC</b>"
+                        )
+                        # Fire-and-forget: não bloqueia o loop principal
+                        asyncio.create_task(
+                            enviar_alerta_telegram(g.phone, mensagem_tg)
+                        )
 
             await db.commit()
             logger.info(
@@ -557,20 +573,15 @@ async def analyze_frame(camera_id: int, frame_data: bytes, sector_id: int | None
     nparr = np.frombuffer(frame_data, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if frame is None:
-        return {
-            "status": "erro",
-            "detections": [],
-            "epi_detected": [],
-            "epis_ausentes": [],
-            "pessoa_detectada": False,
-            "confidence": 0.0,
-        }
+        return {"status": "erro", "detections": [], "epi_detected": [],
+                "epis_ausentes": [], "pessoa_detectada": False, "confidence": 0.0}
 
+    epis = await get_epis_obrigatorios_do_setor(sector_id)    # ← busca correto
     deteccoes = inferir_frame(frame)
-    return avaliar_deteccoes(deteccoes, sector_id=sector_id)
-
+    return avaliar_deteccoes(deteccoes, epis_obrigatorios=epis)
 
 
 async def analisar_frame(camera_id: int, frame: np.ndarray, sector_id: int | None = None) -> dict:
+    epis = await get_epis_obrigatorios_do_setor(sector_id)     # ← busca correto
     deteccoes = await asyncio.get_event_loop().run_in_executor(None, inferir_frame, frame)
-    return avaliar_deteccoes(deteccoes, sector_id=sector_id)
+    return avaliar_deteccoes(deteccoes, epis_obrigatorios=epis)

@@ -17,6 +17,8 @@ from app.models.user import User, UserRole
 from app.models.sector import Sector
 from app.api import notifications
 from app.api import reports
+from app.api.telegram import router as telegram_router
+
 
 import app.models
 
@@ -140,6 +142,7 @@ app.include_router(detection.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
 app.include_router(notifications.router, prefix=API_PREFIX)
 app.include_router(chatbot_router)
+app.include_router(telegram_router, prefix="/api")
 
 
 @app.get("/health", tags=["Health"])
@@ -150,3 +153,25 @@ async def health_check():
 @app.get("/", tags=["Health"])
 async def root():
     return {"message": "EPIsee API está rodando.", "docs": "/docs", "health": "/health"}
+
+@app.on_event("startup")
+async def registrar_webhook_telegram():
+    import httpx
+    from app.core.config import settings
+
+    token = getattr(settings, "TELEGRAM_BOT_TOKEN", "")
+    url_webhook = getattr(settings, "APP_URL", "")  # ex: https://abc.ngrok.io
+
+    if not token or not url_webhook:
+        return  # silencioso se não configurado
+
+    webhook_url = f"{url_webhook}/api/telegram/webhook"
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"https://api.telegram.org/bot{token}/setWebhook",
+            json={"url": webhook_url, "drop_pending_updates": True},
+        )
+        if resp.status_code == 200:
+            print(f"[TELEGRAM] Webhook registrado: {webhook_url}")
+        else:
+            print(f"[TELEGRAM] Falha ao registrar webhook: {resp.text}")

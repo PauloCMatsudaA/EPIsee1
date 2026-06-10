@@ -21,6 +21,8 @@ class User(Base):
     role = Column(Enum(UserRole), nullable=False, default=UserRole.trabalhador)
     sector_id = Column(Integer, ForeignKey("sectors.id"), nullable=True)
     phone = Column(String(20), nullable=True)
+    telegram_chat_id = Column(String(50),  nullable=True)
+    telegram_link_code = Column(String(20), nullable=True)
     is_active       = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)   
 
