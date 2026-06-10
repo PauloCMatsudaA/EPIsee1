@@ -2,11 +2,13 @@ import asyncio
 import os
 from datetime import datetime
 from typing import List
+from sqlalchemy.orm import joinedload
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-
+import shutil
+from pathlib import Path
 from app.core.database import get_db
 from app.core.deps import get_current_user, get_current_manager
 from app.models.user import User
@@ -25,11 +27,12 @@ MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "best.pt"
 
 
 @router.get("/", response_model=List[CameraResponse])
-async def list_cameras(
-    db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
-):
-    result = await db.execute(select(Camera).order_by(Camera.name))
+async def list_cameras(db: AsyncSession = Depends(get_db), _=Depends(get_current_user)):
+    result = await db.execute(
+        select(Camera)
+        .options(joinedload(Camera.sector)) 
+        .order_by(Camera.name)
+    )
     cameras = result.scalars().all()
     return [CameraResponse.model_validate(c) for c in cameras]
 
@@ -73,19 +76,24 @@ async def update_camera(
     return CameraResponse.model_validate(camera)
 
 
-@router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
+HLS_DIR = Path("hls")  # ajuste para o caminho real do seu projeto
+
+@router.delete("/{camera_id}", status_code=204)
 async def delete_camera(
     camera_id: int,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_manager),
+    current_user=Depends(get_current_user),
 ):
-    result = await db.execute(select(Camera).where(Camera.id == camera_id))
-    camera = result.scalar_one_or_none()
+    camera = await db.get(Camera, camera_id)
     if not camera:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Câmera não encontrada")
+        raise HTTPException(404, "Câmera não encontrada")
     await db.delete(camera)
-    await db.flush()
+    await db.commit()
 
+    # Remove pasta de segmentos HLS da câmera excluída
+    pasta_hls = HLS_DIR / str(camera_id)
+    if pasta_hls.exists():
+        shutil.rmtree(pasta_hls, ignore_errors=True)
 
 @router.post("/{camera_id}/start-detection", response_model=DetectionControl)
 async def start_detection(

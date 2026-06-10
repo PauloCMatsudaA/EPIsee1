@@ -1,16 +1,22 @@
 from datetime import datetime
 from typing import Optional, List, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from app.models.occurrence import OccurrenceStatus
 
 
 class OccurrenceBase(BaseModel):
-    camera_id: int
-    sector_id: int
+    # Optional pois câmera/setor podem ter sido deletados (FK SET NULL)
+    camera_id: Optional[int] = None
+    sector_id: Optional[int] = None
     status: OccurrenceStatus = OccurrenceStatus.conforme
     epi_detected: List[Any] = []
     confidence: Optional[float] = None
     image_path: Optional[str] = None
+
+    @field_validator("epi_detected", mode="before")
+    @classmethod
+    def nulo_vira_lista(cls, v):
+        return v if v is not None else []
 
 
 class OccurrenceCreate(OccurrenceBase):
@@ -28,7 +34,6 @@ class OccurrenceResponse(OccurrenceBase):
     id: int
     timestamp: datetime
     created_at: datetime
-    # Campos enriquecidos — nome real da câmera e do setor
     camera_name: Optional[str] = None
     sector_name: Optional[str] = None
 

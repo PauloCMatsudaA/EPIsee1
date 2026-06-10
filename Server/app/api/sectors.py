@@ -1,13 +1,15 @@
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
+from collections import Counter
 
 from app.core.database import get_db
 from app.core.deps import get_current_user, get_current_manager
 from app.models.user import User
 from app.models.sector import Sector
-from app.schemas.sector import SectorCreate, SectorUpdate, SectorResponse
+from app.models.occurrence import Occurrence, OccurrenceStatus
+from app.schemas.sector import SectorCreate, SectorUpdate, SectorResponse, SectorStats
 
 router = APIRouter(prefix="/sectors", tags=["Sectors"])
 
@@ -17,7 +19,6 @@ async def list_sectors(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """List all sectors."""
     result = await db.execute(select(Sector).order_by(Sector.name))
     sectors = result.scalars().all()
     return [SectorResponse.model_validate(s) for s in sectors]
@@ -29,12 +30,57 @@ async def get_sector(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
-    """Get a sector by ID."""
     result = await db.execute(select(Sector).where(Sector.id == sector_id))
     sector = result.scalar_one_or_none()
     if not sector:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Setor não encontrado")
     return SectorResponse.model_validate(sector)
+@router.get("/{sector_id}/stats", response_model=SectorStats)
+async def get_sector_stats(
+    sector_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    result = await db.execute(select(Sector).where(Sector.id == sector_id))
+    sector = result.scalar_one_or_none()
+    if not sector:
+        raise HTTPException(status_code=404, detail="Setor não encontrado")
+
+    # Busca ocorrências do setor
+    occ_result = await db.execute(
+        select(Occurrence).where(Occurrence.sector_id == sector_id)
+    )
+    ocorrencias = occ_result.scalars().all()
+
+    conformes     = sum(1 for o in ocorrencias if o.status == OccurrenceStatus.conforme)
+    nao_conformes = sum(1 for o in ocorrencias if o.status == OccurrenceStatus.nao_conforme)
+    total         = len(ocorrencias)
+    taxa          = round(conformes / total, 4) if total > 0 else 0.0
+
+    # Conta quais EPIs foram mais vezes detectados como ausentes
+    ausencias: list[str] = []
+    for o in ocorrencias:
+        epis_det = o.epi_detected or []
+        obrigatorios = sector.epis_obrigatorios or []
+        ausentes = [e for e in obrigatorios if e not in epis_det]
+        ausencias.extend(ausentes)
+
+    contador = Counter(ausencias)
+    epis_mais_ausentes = [
+        {"epi": epi, "ausencias": qtd}
+        for epi, qtd in contador.most_common()
+    ]
+
+    return SectorStats(
+        sector_id=sector.id,
+        sector_name=sector.name,
+        epis_obrigatorios=sector.epis_obrigatorios or [],
+        total_ocorrencias=total,
+        conformes=conformes,
+        nao_conformes=nao_conformes,
+        taxa_conformidade=taxa,
+        epis_mais_ausentes=epis_mais_ausentes,
+    )
 
 
 @router.post("/", response_model=SectorResponse, status_code=status.HTTP_201_CREATED)

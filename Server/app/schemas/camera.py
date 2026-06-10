@@ -3,6 +3,15 @@ from typing import Optional
 from pydantic import BaseModel
 
 
+# Schema resumido do setor para embutir na câmera
+class SectorInfo(BaseModel):
+    id: int
+    name: str
+    epis_obrigatorios: list[str] = []
+
+    model_config = {"from_attributes": True}
+
+
 class CameraBase(BaseModel):
     name: str
     location: Optional[str] = None
@@ -27,6 +36,7 @@ class CameraResponse(CameraBase):
     id: int
     last_seen: Optional[datetime] = None
     created_at: datetime
+    sector: Optional[SectorInfo] = None
 
     model_config = {"from_attributes": True}
 

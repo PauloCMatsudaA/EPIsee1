@@ -17,7 +17,7 @@ class Occurrence(Base):
     __tablename__ = "occurrences"
 
     id           = Column(Integer, primary_key=True, index=True)
-    camera_id    = Column(Integer, ForeignKey("cameras.id"), nullable=False)
+    camera_id = Column(Integer, ForeignKey("cameras.id", ondelete="SET NULL"), nullable=True)
     sector_id    = Column(Integer, ForeignKey("sectors.id"), nullable=False)
     timestamp    = Column(DateTime, server_default=func.now(), nullable=False)
     status       = Column(Enum(OccurrenceStatus), nullable=False, default=OccurrenceStatus.conforme)

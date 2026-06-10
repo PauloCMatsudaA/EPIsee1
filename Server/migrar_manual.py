@@ -12,6 +12,7 @@ if "is_active" not in columns:
     print("Coluna is_active já foi removida. Nada a fazer.")
     conn.close()
     exit()
+    
 
 print("Recriando tabela users sem is_active...")
 

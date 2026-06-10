@@ -27,7 +27,6 @@ cliente.interceptors.response.use(
   },
 );
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
 export const autenticacaoApi = {
   login: (email, senha) =>
     cliente.post(
@@ -94,8 +93,10 @@ export const camerasApi = {
 
 export const setoresApi = {
   listar:  ()          => cliente.get("/api/sectors/"),
+  buscar:  (id)        => cliente.get(`/api/sectors/${id}`),
+  stats:   (id)        => cliente.get(`/api/sectors/${id}/stats`),     // ← novo
   criar:   (dados)     => cliente.post("/api/sectors/", dados),
-  editar:  (id, dados) => cliente.put(`/api/sectors/${id}`, dados),
+  editar:  (id, dados) => cliente.patch(`/api/sectors/${id}`, dados),  // ← corrigido
   excluir: (id)        => cliente.delete(`/api/sectors/${id}`),
 };
 

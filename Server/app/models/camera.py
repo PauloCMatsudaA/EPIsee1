@@ -2,6 +2,7 @@ from datetime import datetime
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from app.core.database import Base
+from sqlalchemy.orm import relationship
 
 
 class Camera(Base):
@@ -15,7 +16,5 @@ class Camera(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     last_seen = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-
-    # Relationships
-    sector = relationship("Sector", back_populates="cameras")
+    sector = relationship("Sector", back_populates="cameras", lazy="select")
     occurrences = relationship("Occurrence", back_populates="camera", lazy="selectin")

@@ -67,13 +67,22 @@ async def seed():
 
         # ── Câmeras ───────────────────────────────────────────────────────────
         cameras = []
+        CAMERA_RTSP = {
+                    "Produção":      ["rtsp://192.168.1.10/stream", "rtsp://192.168.1.11/stream"],
+                    "Manutenção":    ["rtsp://192.168.1.12/stream", "rtsp://192.168.1.13/stream"],
+                    "Almoxarifado":  ["rtsp://192.168.1.14/stream", "rtsp://192.168.1.15/stream"],
+                    "Expedição":     ["rtsp://192.168.1.16/stream", "rtsp://192.168.1.17/stream"],
+                }
         for i, setor in enumerate(setores):
             for j in range(2):
+            
+
+                # E dentro do loop de criação de câmeras:
                 c = Camera(
                     name=f"Câmera {j+1} — {setor.name}",
                     location=f"{setor.name} — Área {j+1}",
                     sector_id=setor.id,
-                    stream_url=f"rtsp://192.168.1.{10+i*2+j}/stream",
+                    rtsp_url=CAMERA_RTSP[setor.name][j],  # ← campo correto
                     is_active=True,
                 )
                 cameras.append(c)

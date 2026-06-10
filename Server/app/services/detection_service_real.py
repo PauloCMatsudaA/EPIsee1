@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from datetime import datetime
 from threading import Thread
+from app.core.sector_epi_config import get_epis_obrigatorios
 
 
 
@@ -27,7 +28,6 @@ if not os.path.exists(MODEL_PATH):
 
 
 
-# ✅ CORREÇÃO: path absoluto baseado no CWD, evita falha de fallback
 VIDEO_FALLBACK = os.path.join(os.getcwd(), "..", "teste.mp4")
 if not os.path.exists(VIDEO_FALLBACK):
     VIDEO_FALLBACK = os.path.join(os.getcwd(), "teste.mp4")
@@ -48,9 +48,22 @@ CLASSES_EPI = {
     "safety-suit",
 }
 
-
-
-EPIS_OBRIGATORIOS = {"glasses"}
+async def get_epis_obrigatorios_do_setor(sector_id: int | None) -> set[str]:
+    if sector_id is None:
+        return {"safety-vest"}
+    try:
+        from app.core.database import AsyncSessionLocal
+        from app.models.sector import Sector
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                select(Sector).where(Sector.id == sector_id)
+            )
+            sector = result.scalar_one_or_none()
+            if sector and sector.epis_obrigatorios:
+                return set(sector.epis_obrigatorios)
+    except Exception:
+        pass
+    return {"safety-vest"}
 
 
 
@@ -317,12 +330,14 @@ def inferir_frame(frame: np.ndarray) -> list[dict]:
     return deteccoes
 
 
+def avaliar_deteccoes(deteccoes: list[dict], epis_obrigatorios: set[str] | None = None) -> dict:
+    if epis_obrigatorios is None:
+        epis_obrigatorios = {"safety-vest"}
 
-def avaliar_deteccoes(deteccoes: list[dict]) -> dict:
     classes = {d["class"] for d in deteccoes}
     pessoa_detectada = bool(classes & CLASSE_PESSOA)
     epis_encontrados = classes & CLASSES_EPI
-    epis_ausentes = EPIS_OBRIGATORIOS - epis_encontrados
+    epis_ausentes = epis_obrigatorios - epis_encontrados
 
     if not pessoa_detectada:
         status = "sem_pessoa"
@@ -337,11 +352,11 @@ def avaliar_deteccoes(deteccoes: list[dict]) -> dict:
         "status": status,
         "epi_detected": list(epis_encontrados),
         "epis_ausentes": list(epis_ausentes),
+        "epis_obrigatorios": list(epis_obrigatorios),
         "pessoa_detectada": pessoa_detectada,
         "confidence": confianca,
         "detections": deteccoes,
     }
-
 
 
 async def salvar_ocorrencia(camera_id: int, sector_id: int, resultado: dict, frame: np.ndarray):
@@ -415,7 +430,7 @@ async def salvar_ocorrencia(camera_id: int, sector_id: int, resultado: dict, fra
 
 
 async def processar_stream_camera(camera_id: int, fonte, sector_id: int):
-    logger.info(f"[CAM {camera_id}] Iniciando deteccao real-time -> {fonte}")
+    epis_obrigatorios = await get_epis_obrigatorios_do_setor(sector_id) 
 
     reader = FrameReader(fonte, camera_id)
     reader.start()
@@ -449,7 +464,8 @@ async def processar_stream_camera(camera_id: int, fonte, sector_id: int):
                     hls_pipe_iniciado = False
 
             deteccoes = await loop.run_in_executor(None, inferir_frame, frame)
-            resultado = avaliar_deteccoes(deteccoes)
+            resultado = avaliar_deteccoes(deteccoes, epis_obrigatorios=epis_obrigatorios)
+
 
             logger.info(
                 f"[CAM {camera_id}] Frame {frame_num:05d} | "
@@ -459,7 +475,6 @@ async def processar_stream_camera(camera_id: int, fonte, sector_id: int):
                 f"conf={resultado['confidence']:.2f}"
             )
 
-            # ✅ CORREÇÃO: ignora apenas sem_pessoa; salva conforme e nao_conforme
             if not resultado["pessoa_detectada"]:
                 continue
 
@@ -502,22 +517,30 @@ async def start_camera_streams():
         model_existe = os.path.exists(MODEL_PATH)
         logger.info(f"[STARTUP] best.pt encontrado: {model_existe} -> {os.path.abspath(MODEL_PATH)}")
 
+        fontes_em_uso: set = set()
+
         for cam in cameras:
-            try:
-                fonte = normalize_camera_source(cam.rtsp_url)
-                sector_id = cam.sector_id or 1
-                logger.info(f"[STARTUP] Camera {cam.id} ({cam.name}) -> {fonte}")
+            fonte = normalize_camera_source(cam.rtsp_url)
+            chave = str(fonte)  # "0", "1", ou URL RTSP
 
-                iniciar_hls(cam.id, fonte)
-
-                task = asyncio.create_task(
-                    processar_stream_camera(cam.id, fonte, sector_id)
+            if chave in fontes_em_uso:
+                logger.error(
+                    f"[STARTUP] ⚠️  Camera {cam.id} ({cam.name}) ignorada — "
+                    f"fonte '{chave}' já está em uso por outra câmera. "
+                    f"Corrija o rtsp_url no banco de dados."
                 )
-                tarefas_deteccao[cam.id] = task
-                logger.info(f"[STARTUP] Deteccao real-time iniciada: camera {cam.id}")
-            except Exception as e:
-                logger.error(f"[CAM {cam.id}] Erro ao iniciar: {e}")
                 continue
+
+            fontes_em_uso.add(chave)
+            sector_id = cam.sector_id or 1
+            logger.info(f"[STARTUP] Camera {cam.id} ({cam.name}) -> {fonte}")
+
+            iniciar_hls(cam.id, fonte)
+            task = asyncio.create_task(
+                processar_stream_camera(cam.id, fonte, sector_id)
+            )
+            tarefas_deteccao[cam.id] = task
+            logger.info(f"[STARTUP] Deteccao real-time iniciada: camera {cam.id}")
 
     except Exception as e:
         logger.error(f"[STARTUP] Erro: {e}", exc_info=True)
@@ -530,7 +553,7 @@ async def start_camera_streams():
 
 
 
-async def analyze_frame(camera_id: int, frame_data: bytes) -> dict:
+async def analyze_frame(camera_id: int, frame_data: bytes, sector_id: int | None = None) -> dict:
     nparr = np.frombuffer(frame_data, np.uint8)
     frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if frame is None:
@@ -544,10 +567,10 @@ async def analyze_frame(camera_id: int, frame_data: bytes) -> dict:
         }
 
     deteccoes = inferir_frame(frame)
-    return avaliar_deteccoes(deteccoes)
+    return avaliar_deteccoes(deteccoes, sector_id=sector_id)
 
 
 
-async def analisar_frame(camera_id: int, frame: np.ndarray) -> dict:
+async def analisar_frame(camera_id: int, frame: np.ndarray, sector_id: int | None = None) -> dict:
     deteccoes = await asyncio.get_event_loop().run_in_executor(None, inferir_frame, frame)
-    return avaliar_deteccoes(deteccoes)
+    return avaliar_deteccoes(deteccoes, sector_id=sector_id)
